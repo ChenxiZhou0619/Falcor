@@ -48,6 +48,8 @@ import NRDHelpers;
 __exported import PathState;
 __exported import Params;
 
+// clang-format off
+
 /** Path tracer.
 
     This implements the high-level path tracing logic and is shared among
@@ -1177,8 +1179,10 @@ struct PathTracer
     /** Handle the case when a scatter ray hits a surface or a volume particle.
         After handling the hit, a new scatter ray is generated or the path is terminated.
         \param[in,out] path The path state.
-        \param[in,out] vq Visibility query.
+        \param[in,out] vq Transmittance query.
     */
+
+    // TODO, the mis should also consider the distance pdf
     void handleHitVol<VisibilityQuery : IVisibilityQuery>(inout PathState path, inout VisibilityQuery vq)
     {
         // Upon hit:
@@ -1203,25 +1207,36 @@ struct PathTracer
         bool isVolumeInteraction = false;
         if (!path.interiorList.isEmpty())
         {
-            // TODO for gridVolume, vp is not enough, volumeID may prefered
             const uint materialID = path.interiorList.getTopMaterialID();
             let material = gScene.materials.getMaterial(materialID);
+
+            /*
+                struct VolumeInfo {
+                    int gridIndex; // -1 represents homogeneous
+
+                    float3 sigmaA, sigmaS;
+                    IPhaseFunction phaseFunction;
+                }
+            */
             let vf = material.getVolumeInfo(gScene.materials, materialID);
 
-            //* This function only do distance sampling
+            //* Only distance sampling, path.origin and thp would be updated if sampled
             isVolumeInteraction = handleVolumeScattering(sd, path, vf);
         }
 
         if (isVolumeInteraction)
         {
-            // TODO handle volume interaction
-
             uint diffuseBounces = path.getBounces(BounceType::Diffuse);
             if (diffuseBounces > kMaxDiffuseBounces)
             {
                 path.terminate();
                 return;
             }
+
+            const uint materialID = path.interiorList.getTopMaterialID();
+            let material = gScene.materials.getMaterial(materialID);
+            let vf = material.getVolumeInfo(gScene.materials, materialID);
+            let phase = vf.phaseFunction;
 
             //* Apply nee
             path.setLightSampled(false, false);
@@ -1239,11 +1254,11 @@ struct PathTracer
             {
                 if (ls.lightType != (uint)LightType::Analytic)
                 {
-                    float scatterPdf = 0.25f / 3.14159265358979323846;
+                    float scatterPdf = phase.evalPdf(-path.dir, ls.dir);
                     ls.Li *= evalMIS(1, ls.pdf, 1, scatterPdf);
                 }
 
-                float3 phaseWeight = 0.25f / 3.14159265358979323846;
+                float3 phaseWeight = phase.eval(-path.dir, ls.dir);
                 float3 Lr = phaseWeight * ls.Li;
 
                 if (any(Lr > .0f))
@@ -1257,17 +1272,18 @@ struct PathTracer
                 }
             }
 
-            // TODO fix the api
-            const uint materialID = path.interiorList.getTopMaterialID();
-            let material = gScene.materials.getMaterial(materialID);
-            let vp = material.getHomogeneousVolumeProperties(gScene.materials, materialID);
 
             float3 wo = {};
             float3 weight = {};
-            bool valid = vp.phaseFunction.sample(-path.dir, wo, path.pdf, weight, path.sg);
+            bool valid = phase.sample(-path.dir, wo, path.pdf, weight, path.sg);
             path.dir = wo;
             updatePathThroughput(path, weight);
             path.incrementBounces(BounceType::Diffuse);
+
+            //* Store the current position and normal
+            path.shading_origin = path.origin;
+            path.shading_normal = path.dir;
+            path.hitVolume = true; 
 
             if (!valid)
             {
@@ -1309,8 +1325,6 @@ struct PathTracer
 
                 if (!isPrimaryHit && path.isLightSamplable())
                 {
-                    //? Handle the path originated from a interface hit, the distance should be adjusted
-
                     TriangleHit triangleHit = path.hit.getTriangleHit();
                     TriangleLightHit hit;
                     hit.triangleIndex = gScene.lightCollection.getTriangleIndex(triangleHit.instanceID, triangleHit.primitiveIndex);
@@ -1319,10 +1333,13 @@ struct PathTracer
 
                     // Evaluate PDF at the hit, had it been generated with light sampling.
                     // Emissive light samplers have an option to exclusively sample the upper hemisphere.
+
+                    //! Note, the path origin, normal here should be last "no interface" hit,
+                    //! which is stored in path.shading_origin/normal 
                     bool upperHemisphere = path.isLightSampledUpper() && !path.isLightSampledLower();
                     float lightPdf =
 
-                        getEmissiveSelectionProbability() * emissiveSampler.evalPdf(path.origin, path.normal, upperHemisphere, hit);
+                        getEmissiveSelectionProbability() * emissiveSampler.evalPdf(path.shading_origin, path.shading_normal, upperHemisphere, hit);
 
                     // Compute MIS weight by combining this with BSDF sampling.
                     // Note we can assume path.pdf > 0.f since we shouldn't have got here otherwise.
@@ -1384,6 +1401,9 @@ struct PathTracer
 
             bool valid = generateScatterRay(sd, mi, path);
             const bool isLastVertex = hasFinishedSurfaceBounces(path);
+
+            path.shading_origin = path.origin;
+            path.shading_normal = sd.faceN;
 
             if (isLastVertex)
                 valid = false;

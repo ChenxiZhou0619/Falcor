@@ -25,7 +25,8 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
-#include "Scene/SceneDefines.slangh"
+// clang-format off
+ #include "Scene/SceneDefines.slangh"
 
 import Scene.Raytracing;
 import Scene.RaytracingInline; // For visibility queries.
@@ -60,6 +61,7 @@ struct DummyAttribs
 
 struct PathPayload
 {
+    bool hitVolume;            ///< Path hit state
     uint4 packed[5];
 
     PackedHitInfo hit;
@@ -91,6 +93,7 @@ struct PathPayload
         p.guideData = path.guideData;
         p.interiorList = path.interiorList;
         p.sg = path.sg;
+        p.hitVolume = path.hitVolume;
 
         return p;
     }
@@ -119,6 +122,7 @@ struct PathPayload
         path.guideData = p.guideData;
         path.interiorList = p.interiorList;
         path.sg = p.sg;
+        path.hitVolume = p.hitVolume;
 
         return path;
     }
@@ -141,6 +145,7 @@ struct VisibilityQuery : PathTracer::IVisibilityQuery
     }
 };
 
+//* Transmittance query
 struct TransmittanceQuery : PathTracer::IVisibilityQuery
 {
     bool traceVisibilityRay(const Ray ray)
@@ -390,14 +395,22 @@ struct ReorderingScheduler
         // Trace path.
         while (path.isActive())
         {
+            {
+                path.incrementVertexIndex();
+
+                const uint materialID = gScene.getMaterialID(path.hit.getInstanceID());
+                const MaterialHeader materialHeader = gScene.materials.getMaterialHeader(materialID);
+                bool hitInterface = materialHeader.getMaterialType() == MaterialType::Interface;
+
+                //* The only case we don't increment vertexIndex is hit interface surface
+                if (!path.hitVolume && hitInterface)
+                    path.decrementVertexIndex();
+            }
             PathPayload payload = {};
             HitObject hitObject;
 
             {
                 // Advance to next path vertex.
-                // TODO if not hit interface, increment the vertexIndex
-                path.incrementVertexIndex();
-
                 // Trace ray.
                 logTraceRay(PixelStatsRayType::ClosestHit);
                 const Ray ray = path.getScatterRay();
@@ -431,9 +444,6 @@ struct ReorderingScheduler
             const uint materialID = gScene.getMaterialID(path.hit.getInstanceID());
             const MaterialHeader materialHeader = gScene.materials.getMaterialHeader(materialID);
             uint coherenceHints = gPathTracer.getCoherenceHints(path, materialHeader.isDeltaSpecular(), materialHeader.isEmissive());
-
-            if (materialHeader.getMaterialType() == MaterialType::Interface)
-                path.decrementVertexIndex();
 
             // Reorder and invoke closest hit or miss shader.
             ReorderThread(hitObject, coherenceHints, 4);

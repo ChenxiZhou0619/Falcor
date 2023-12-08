@@ -25,6 +25,8 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
+// clang-format off
+
 import Utils.Math.PackedFormats;
 __exported import Scene.HitInfo;
 __exported import Utils.Math.Ray;
@@ -102,6 +104,15 @@ struct PathState
     GuideData   guideData;              ///< Denoiser guide data.
     InteriorList interiorList;          ///< Interior list. Keeping track of a stack of materials with medium properties.
     SampleGenerator sg;                 ///< Sample generator state. Typically 4-16B.
+
+
+    //* Due to the interface material, the path.origin may not be the 'real' last shading point,
+    //* the true path.origin/normal should be stored to perform correct mis 
+    float3 shading_origin;             
+    float3 shading_normal;
+
+    //* Identify the hit type
+    bool hitVolume = false;             
 
     // Accessors
 
