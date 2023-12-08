@@ -62,7 +62,8 @@ struct DummyAttribs
 struct PathPayload
 {
     bool hitVolume;            ///< Path hit state
-    uint4 packed[5];
+
+    uint4 packed[7];
 
     PackedHitInfo hit;
     GuideData guideData;
@@ -95,6 +96,8 @@ struct PathPayload
         p.sg = path.sg;
         p.hitVolume = path.hitVolume;
 
+        p.packed[5].xyz = asuint(path.shading_origin);
+        p.packed[6].xyz = asuint(path.shading_normal);
         return p;
     }
 
@@ -124,6 +127,9 @@ struct PathPayload
         path.sg = p.sg;
         path.hitVolume = p.hitVolume;
 
+        path.shading_origin = asfloat(p.packed[5].xyz);
+        path.shading_normal = asfloat(p.packed[6].xyz);
+        
         return path;
     }
 };
